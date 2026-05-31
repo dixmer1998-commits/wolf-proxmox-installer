@@ -117,13 +117,27 @@ get_configuration() {
         fi
     done
 
-    # Disco
-    read -p "Tamanio del disco en GB [${CONTAINER_DISK}]: " input_disk
-    CONTAINER_DISK="${input_disk:-$CONTAINER_DISK}"
+    # Disco (validar que sea numero)
+    while true; do
+        read -p "Tamanio del disco en GB [${CONTAINER_DISK}]: " input_disk
+        DISK_INPUT="${input_disk:-$CONTAINER_DISK}"
+        if [[ "$DISK_INPUT" =~ ^[0-9]+$ ]] && [[ "$DISK_INPUT" -gt 0 ]]; then
+            CONTAINER_DISK="$DISK_INPUT"
+            break
+        fi
+        log_warn "El tamanio debe ser un numero entero positivo"
+    done
 
-    # Storage
-    read -p "Pool de almacenamiento [${CONTAINER_STORAGE}]: " input_storage
-    CONTAINER_STORAGE="${input_storage:-$CONTAINER_STORAGE}"
+    # Storage (validar que no sea numero)
+    while true; do
+        read -p "Pool de almacenamiento [${CONTAINER_STORAGE}]: " input_storage
+        STORAGE_INPUT="${input_storage:-$CONTAINER_STORAGE}"
+        if [[ ! "$STORAGE_INPUT" =~ ^[0-9]+$ ]]; then
+            CONTAINER_STORAGE="$STORAGE_INPUT"
+            break
+        fi
+        log_warn "El pool debe ser un nombre (ej: local-lvm), no un numero"
+    done
 
     # RAM
     read -p "RAM en MB [${CONTAINER_RAM}]: " input_ram
@@ -175,6 +189,20 @@ get_configuration() {
 create_container() {
     log_step "Creando contenedor LXC ${CONTAINER_ID}..."
 
+    # Verificar si ya existe
+    if pct status "$CONTAINER_ID" &>/dev/null; then
+        log_warn "El contenedor ${CONTAINER_ID} ya existe"
+        read -p "Eliminar contenedor existente y recrear? (s/n): " input_delete
+        if [[ "$input_delete" == "s" || "$input_delete" == "S" ]]; then
+            pct stop "$CONTAINER_ID" 2>/dev/null
+            pct destroy "$CONTAINER_ID" --purge
+            log_info "Contenedor ${CONTAINER_ID} eliminado"
+        else
+            log_info "Usando contenedor existente"
+            return 0
+        fi
+    fi
+
     # Construir parametro de red
     local net_param="name=eth0,bridge=vmbr0"
     if [[ "$USE_DHCP" == "s" || "$USE_DHCP" == "S" || "$USE_DHCP" == "y" || "$USE_DHCP" == "Y" ]]; then
@@ -184,7 +212,7 @@ create_container() {
     fi
 
     # Crear el contenedor
-    pct create "$CONTAINER_ID" "$TEMPLATE_FILE" \
+    if ! pct create "$CONTAINER_ID" "$TEMPLATE_FILE" \
         --hostname "$CONTAINER_HOSTNAME" \
         --password "$CONTAINER_PASSWORD" \
         --unprivileged 0 \
@@ -194,7 +222,10 @@ create_container() {
         --rootfs "${CONTAINER_STORAGE}:${CONTAINER_DISK}" \
         --net0 "$net_param" \
         --ostype ubuntu \
-        --onboot 1
+        --onboot 1; then
+        log_error "Error al crear el contenedor LXC"
+        exit 1
+    fi
 
     log_info "Contenedor ${CONTAINER_ID} creado exitosamente"
 }
