@@ -91,13 +91,13 @@ print_menu() {
     echo -e "${CYAN}=== Opciones de Instalacion ===${NC}"
     echo ""
     echo "  1) Instalacion completa (las 3 fases)"
-    echo "     - Fase 1: Configuracion del host (IOMMU, VFIO, drivers)"
+    echo "     - Fase 1: Configuracion del host (firmware, udev rules)"
     echo "     - Fase 2: Crear contenedor LXC"
     echo "     - Fase 3: Instalar Wolf y Wolf Den"
     echo ""
-    echo "  2) Solo Fase 1: Configurar host (ejecutar primero, luego reboot)"
+    echo "  2) Solo Fase 1: Configurar host (sin reinicio necesario)"
     echo ""
-    echo "  3) Solo Fase 2: Crear contenedor LXC (despues del reboot)"
+    echo "  3) Solo Fase 2: Crear contenedor LXC"
     echo ""
     echo "  4) Solo Fase 3: Configurar LXC (despues de crear el contenedor)"
     echo ""
@@ -165,10 +165,11 @@ run_full_installation() {
     echo ""
 
     echo -e "${CYAN}Esto hara:${NC}"
-    echo "  1. Configurar el host (IOMMU, VFIO, drivers de GPU)"
-    echo "  2. Reiniciar el host"
-    echo "  3. Crear contenedor LXC privilegiado con GPU passthrough"
-    echo "  4. Instalar Docker, Wolf y Wolf Den dentro del contenedor"
+    echo "  1. Configurar el host (firmware AMD, udev rules de input)"
+    echo "  2. Crear contenedor LXC privilegiado con GPU compartida"
+    echo "  3. Instalar Docker, Wolf y Wolf Den dentro del contenedor"
+    echo ""
+    echo -e "${YELLOW}NOTA: Tu GPU AMD seguira disponible en el host para otras tareas.${NC}"
     echo ""
 
     read -p "Proceder? (s/n): " confirm
@@ -179,20 +180,13 @@ run_full_installation() {
     # Fase 1
     run_phase1
 
-    # Pedir reboot
+    # Fase 2
     echo ""
-    read -p "Fase 1 completada. Reiniciar ahora? (s/n): " do_reboot
-    if [[ "$do_reboot" == "s" || "$do_reboot" == "S" || "$do_reboot" == "y" || "$do_reboot" == "Y" ]]; then
-        log_info "Reiniciando en 5 segundos... Ejecuta este script de nuevo despues del reboot."
-        sleep 5
-        reboot
-    else
-        log_warn "Reinicia manualmente antes de continuar con la Fase 2"
-        echo ""
-        echo -e "${YELLOW}Despues del reboot, ejecuta:${NC}"
-        echo "  sudo bash -c \"\$(curl -fsSL ${REPO_URL}/install.sh)\""
-        echo "  Luego selecciona la opcion 2 o 3"
-    fi
+    run_phase2
+
+    # Fase 3
+    echo ""
+    run_phase3
 }
 
 main() {
