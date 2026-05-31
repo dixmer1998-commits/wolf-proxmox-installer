@@ -1,9 +1,9 @@
 #!/bin/bash
-set -euo pipefail
+set -uo pipefail
 
 #=============================================================================
-# Wolf (Games On Whales) - Proxmox Host Configuration
-# Configures IOMMU, VFIO, GPU passthrough, and udev rules for input devices
+# Wolf (Games On Whales) - Configuracion del Host Proxmox
+# Configura IOMMU, VFIO, GPU passthrough y reglas udev para dispositivos de entrada
 #=============================================================================
 
 RED='\033[0;31m'
@@ -16,282 +16,264 @@ NC='\033[0m'
 print_banner() {
     echo -e "${CYAN}"
     echo "╔══════════════════════════════════════════════════════════════╗"
-    echo "║       Wolf (Games On Whales) - Host Configuration          ║"
-    echo "║              Phase 1: Proxmox Host Setup                   ║"
+    echo "║       Wolf - Configuracion del Host Proxmox                ║"
+    echo "║              Fase 1: Preparacion del Host                  ║"
     echo "╚══════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 }
 
 log_info()    { echo -e "${GREEN}[INFO]${NC} $1"; }
-log_warn()    { echo -e "${YELLOW}[WARN]${NC} $1"; }
+log_warn()    { echo -e "${YELLOW}[AVISO]${NC} $1"; }
 log_error()   { echo -e "${RED}[ERROR]${NC} $1"; }
-log_step()    { echo -e "${BLUE}[STEP]${NC} $1"; }
+log_step()    { echo -e "${BLUE}[PASO]${NC} $1"; }
 
 check_root() {
     if [[ $EUID -ne 0 ]]; then
-        log_error "This script must be run as root"
+        log_error "Este script debe ejecutarse como root"
         exit 1
     fi
 }
 
 check_proxmox() {
     if ! command -v pveversion &>/dev/null; then
-        log_error "This script must be run on a Proxmox VE host"
+        log_error "Este script debe ejecutarse en un host Proxmox VE"
         exit 1
     fi
     local pve_version
     pve_version=$(pveversion | head -1)
-    log_info "Proxmox version: ${pve_version}"
+    log_info "Version de Proxmox: ${pve_version}"
 }
 
 detect_amd_gpu() {
-    log_step "Detecting AMD GPU..."
-    
+    log_step "Detectando GPU AMD..."
+
     local gpu_line
     gpu_line=$(lspci | grep -i 'VGA.*AMD\|Display.*AMD\|3D.*AMD' | head -1)
-    
+
     if [[ -z "$gpu_line" ]]; then
-        log_error "No AMD GPU detected. This script is configured for AMD dedicated GPUs only."
-        log_error "Run 'lspci | grep -i vga' to check available GPUs."
+        log_error "No se detecto GPU AMD. Este script es solo para GPUs AMD dedicadas."
+        log_error "Ejecuta 'lspci | grep -i vga' para verificar GPUs disponibles."
         exit 1
     fi
-    
+
     GPU_PCI_ID=$(echo "$gpu_line" | awk '{print $1}')
-    log_info "AMD GPU found: ${gpu_line}"
-    
-    # Find the audio device associated with the GPU (usually on the next line or nearby)
+    log_info "GPU AMD encontrada: ${gpu_line}"
+
+    # Buscar dispositivo de audio asociado a la GPU
     local audio_line
     audio_line=$(lspci | grep -i "Audio.*AMD\|Multimedia.*AMD" | head -1)
-    
+
     if [[ -z "$audio_line" ]]; then
-        log_warn "No AMD audio device found. GPU audio passthrough may not work."
+        log_warn "No se encontro dispositivo de audio AMD. El passthrough de audio puede no funcionar."
         AUDIO_PCI_ID=""
     else
         AUDIO_PCI_ID=$(echo "$audio_line" | awk '{print $1}')
-        log_info "AMD Audio found: ${audio_line}"
+        log_info "Audio AMD encontrado: ${audio_line}"
     fi
-    
-    # Verify these are on the same IOMMU group
-    local gpu_iommu audio_iommu
-    gpu_iommu=$(lspci -nns "$GPU_PCI_ID" | grep -oP '\[.*\]' | tail -1)
-    
+
     echo ""
-    echo -e "${CYAN}Detected GPU PCI IDs:${NC}"
+    echo -e "${CYAN}IDs PCI de la GPU detectados:${NC}"
     echo -e "  GPU:   ${YELLOW}${GPU_PCI_ID}${NC}"
     [[ -n "$AUDIO_PCI_ID" ]] && echo -e "  Audio: ${YELLOW}${AUDIO_PCI_ID}${NC}"
     echo ""
-    
-    read -p "Are these correct? (y/n): " confirm
-    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
-        log_error "Aborted by user. Please check your GPU PCI IDs manually with: lspci | grep -i amd"
+
+    read -p "Son correctos? (s/n): " confirm
+    if [[ "$confirm" != "s" && "$confirm" != "S" && "$confirm" != "y" && "$confirm" != "Y" ]]; then
+        log_error "Cancelado por el usuario. Verifica los IDs PCI con: lspci | grep -i amd"
         exit 1
     fi
 }
 
 configure_grub() {
-    log_step "Configuring GRUB for IOMMU..."
-    
+    log_step "Configurando GRUB para IOMMU..."
+
     local grub_file="/etc/default/grub"
     local backup="${grub_file}.backup.$(date +%Y%m%d%H%M%S)"
-    
+
     if [[ ! -f "$grub_file" ]]; then
-        log_error "GRUB config not found at ${grub_file}"
+        log_error "No se encontro la configuracion de GRUB en ${grub_file}"
         exit 1
     fi
-    
+
     cp "$grub_file" "$backup"
-    log_info "Backup created: ${backup}"
-    
-    # Check if IOMMU is already configured
+    log_info "Backup creado: ${backup}"
+
     if grep -q "amd_iommu=on" "$grub_file"; then
-        log_info "IOMMU already configured in GRUB"
+        log_info "IOMMU ya esta configurado en GRUB"
     else
-        # Add IOMMU parameters
         sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT="\(.*\)"/GRUB_CMDLINE_LINUX_DEFAULT="\1 amd_iommu=on iommu=pt"/' "$grub_file"
-        log_info "IOMMU parameters added to GRUB"
+        log_info "Parametros IOMMU agregados a GRUB"
     fi
-    
-    log_info "Current GRUB_CMDLINE_LINUX_DEFAULT:"
+
+    log_info "GRUB_CMDLINE_LINUX_DEFAULT actual:"
     grep "GRUB_CMDLINE_LINUX_DEFAULT" "$grub_file" | head -1
 }
 
 configure_vfio() {
-    log_step "Configuring VFIO modules..."
-    
-    # Add VFIO modules to /etc/modules
+    log_step "Configurando modulos VFIO..."
+
     local modules_file="/etc/modules"
     local vfio_modules=("vfio" "vfio_iommu_type1" "vfio_pci" "vfio_virqfd")
-    
+
     for module in "${vfio_modules[@]}"; do
         if grep -q "^${module}$" "$modules_file" 2>/dev/null; then
-            log_info "Module '${module}' already in ${modules_file}"
+            log_info "Modulo '${module}' ya existe en ${modules_file}"
         else
             echo "$module" >> "$modules_file"
-            log_info "Added module '${module}' to ${modules_file}"
+            log_info "Modulo '${module}' agregado a ${modules_file}"
         fi
     done
-    
-    # Configure vfio-pci with GPU IDs
+
     local vfio_conf="/etc/modprobe.d/vfio.conf"
     local ids="${GPU_PCI_ID}"
     [[ -n "$AUDIO_PCI_ID" ]] && ids="${GPU_PCI_ID},${AUDIO_PCI_ID}"
-    
-    if [[ -f "$vfio_conf" ]]; then
-        cp "${vfio_conf}.backup.$(date +%Y%m%d%H%M%S)" "${vfio_conf}.bak" 2>/dev/null || true
-    fi
-    
+
     cat > "$vfio_conf" << EOF
-# Wolf GPU passthrough - VFIO PCI configuration
+# Wolf GPU passthrough - Configuracion VFIO PCI
 options vfio-pci ids=${ids}
 softdep radeon pre: vfio-pci
 softdep amdgpu pre: vfio-pci
 softdep snd_hda_intel pre: vfio-pci
 EOF
-    
-    log_info "VFIO configuration written to ${vfio_conf}"
-    log_info "GPU IDs: ${ids}"
+
+    log_info "Configuracion VFIO escrita en ${vfio_conf}"
+    log_info "IDs de GPU: ${ids}"
 }
 
 blacklist_gpu_drivers() {
-    log_step "Blacklisting GPU drivers for host..."
-    
+    log_step "Bloqueando drivers GPU del host..."
+
     local blacklist_file="/etc/modprobe.d/pve-blacklist.conf"
-    
+
     if [[ -f "$blacklist_file" ]]; then
         if grep -q "blacklist amdgpu" "$blacklist_file"; then
-            log_info "amdgpu already blacklisted"
+            log_info "amdgpu ya esta bloqueado"
             return
         fi
     fi
-    
+
     cat >> "$blacklist_file" << EOF
 
-# Wolf GPU passthrough - Blacklist host GPU drivers
+# Wolf GPU passthrough - Bloqueo de drivers GPU del host
 blacklist radeon
 blacklist amdgpu
 EOF
-    
-    log_info "GPU drivers blacklisted in ${blacklist_file}"
+
+    log_info "Drivers GPU bloqueados en ${blacklist_file}"
 }
 
 install_firmware() {
-    log_step "Installing AMD firmware..."
-    
+    log_step "Instalando firmware AMD..."
+
     if dpkg -l | grep -q "firmware-amd-graphics"; then
-        log_info "firmware-amd-graphics already installed"
+        log_info "firmware-amd-graphics ya instalado"
     else
         apt-get update -qq
         apt-get install -y firmware-amd-graphics
-        log_info "AMD firmware installed"
+        log_info "Firmware AMD instalado"
     fi
 }
 
 configure_udev_input() {
-    log_step "Configuring udev rules for Wolf virtual input devices..."
-    
+    log_step "Configurando reglas udev para dispositivos virtuales de Wolf..."
+
     local udev_file="/etc/udev/rules.d/85-wolf-virtual-inputs.rules"
-    
+
     if [[ -f "$udev_file" ]]; then
-        log_info "Udev rules already exist at ${udev_file}"
-        read -p "Overwrite? (y/n): " overwrite
-        if [[ "$overwrite" != "y" && "$overwrite" != "Y" ]]; then
+        log_info "Las reglas udev ya existen en ${udev_file}"
+        read -p "Sobrescribir? (s/n): " overwrite
+        if [[ "$overwrite" != "s" && "$overwrite" != "S" && "$overwrite" != "y" && "$overwrite" != "Y" ]]; then
             return
         fi
     fi
-    
+
     cat > "$udev_file" << 'UDEV_EOF'
-# Wolf virtual input devices rules
-# Allows Wolf to access /dev/uinput (only needed for joypad support)
+# Reglas para dispositivos virtuales de Wolf
+# Permite a Wolf acceder a /dev/uinput (necesario para soporte de joypads)
 KERNEL=="uinput", SUBSYSTEM=="misc", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput", TAG+="uaccess"
 
-# Allows Wolf to access /dev/uhid (only needed for DualSense emulation)
+# Permite a Wolf acceder a /dev/uhid (necesario para emulacion DualSense)
 KERNEL=="uhid", GROUP="input", MODE="0660", TAG+="uaccess"
 
-# Wolf virtual joypads
+# Joypads virtuales de Wolf
 KERNEL=="hidraw*",   ATTRS{name}=="Wolf PS5 (virtual) pad", GROUP="root", MODE="0660", ENV{ID_SEAT}="seat9"
 SUBSYSTEMS=="input", ATTRS{name}=="Wolf X-Box One (virtual) pad", GROUP="root", MODE="0660", ENV{ID_SEAT}="seat9"
 SUBSYSTEMS=="input", ATTRS{name}=="Wolf PS5 (virtual) pad", GROUP="root", MODE="0660", ENV{ID_SEAT}="seat9"
 SUBSYSTEMS=="input", ATTRS{name}=="Wolf gamepad (virtual) motion sensors", GROUP="root", MODE="0660", ENV{ID_SEAT}="seat9"
 SUBSYSTEMS=="input", ATTRS{name}=="Wolf Nintendo (virtual) pad", GROUP="root", MODE="0660", ENV{ID_SEAT}="seat9"
 UDEV_EOF
-    
+
     udevadm control --reload-rules
     udevadm trigger
-    log_info "Udev rules installed and reloaded"
+    log_info "Reglas udev instaladas y recargadas"
 }
 
 update_system() {
-    log_step "Updating GRUB and initramfs..."
-    
+    log_step "Actualizando GRUB e initramfs..."
+
     update-grub
-    log_info "GRUB updated"
-    
+    log_info "GRUB actualizado"
+
     update-initramfs -u -k all
-    log_info "initramfs updated"
+    log_info "initramfs actualizado"
 }
 
 verify_iommu() {
-    log_step "Verifying IOMMU configuration..."
-    
+    log_step "Verificando configuracion IOMMU..."
+
     echo ""
-    echo -e "${CYAN}=== Verification Summary ===${NC}"
-    
-    # Check GRUB
+    echo -e "${CYAN}=== Resumen de Verificacion ===${NC}"
+
     if grep -q "amd_iommu=on" /etc/default/grub; then
-        echo -e "  ${GREEN}✓${NC} IOMMU enabled in GRUB"
+        echo -e "  ${GREEN}✓${NC} IOMMU habilitado en GRUB"
     else
-        echo -e "  ${RED}✗${NC} IOMMU NOT enabled in GRUB"
+        echo -e "  ${RED}✗${NC} IOMMU NO habilitado en GRUB"
     fi
-    
-    # Check VFIO modules
-    local missing_modules=()
+
     for mod in vfio vfio_iommu_type1 vfio_pci vfio_virqfd; do
         if grep -q "^${mod}$" /etc/modules 2>/dev/null; then
-            echo -e "  ${GREEN}✓${NC} Module ${mod} configured"
+            echo -e "  ${GREEN}✓${NC} Modulo ${mod} configurado"
         else
-            echo -e "  ${RED}✗${NC} Module ${mod} missing"
-            missing_modules+=("$mod")
+            echo -e "  ${RED}✗${NC} Modulo ${mod} faltante"
         fi
     done
-    
-    # Check blacklist
+
     if grep -q "blacklist amdgpu" /etc/modprobe.d/pve-blacklist.conf 2>/dev/null; then
-        echo -e "  ${GREEN}✓${NC} amdgpu blacklisted"
+        echo -e "  ${GREEN}✓${NC} amdgpu bloqueado"
     else
-        echo -e "  ${YELLOW}!${NC} amdgpu not blacklisted"
+        echo -e "  ${YELLOW}!${NC} amdgpu no bloqueado"
     fi
-    
-    # Check udev rules
+
     if [[ -f /etc/udev/rules.d/85-wolf-virtual-inputs.rules ]]; then
-        echo -e "  ${GREEN}✓${NC} Wolf udev rules installed"
+        echo -e "  ${GREEN}✓${NC} Reglas udev de Wolf instaladas"
     else
-        echo -e "  ${RED}✗${NC} Wolf udev rules missing"
+        echo -e "  ${RED}✗${NC} Reglas udev de Wolf faltantes"
     fi
-    
-    # Check firmware
+
     if dpkg -l | grep -q "firmware-amd-graphics"; then
-        echo -e "  ${GREEN}✓${NC} AMD firmware installed"
+        echo -e "  ${GREEN}✓${NC} Firmware AMD instalado"
     else
-        echo -e "  ${YELLOW}!${NC} AMD firmware not installed"
+        echo -e "  ${YELLOW}!${NC} Firmware AMD no instalado"
     fi
-    
+
     echo ""
 }
 
 print_next_steps() {
     echo -e "${CYAN}"
     echo "╔══════════════════════════════════════════════════════════════╗"
-    echo "║                    REBOOT REQUIRED                         ║"
+    echo "║                    REINICIO REQUERIDO                      ║"
     echo "╠══════════════════════════════════════════════════════════════╣"
     echo "║                                                            ║"
-    echo "║  A reboot is required for VFIO to take control of the GPU. ║"
+    echo "║  Se necesita reiniciar para que VFIO tome control de GPU.  ║"
     echo "║                                                            ║"
-    echo "║  After reboot, verify with:                                ║"
+    echo "║  Despues del reboot, verifica con:                         ║"
     echo "║    lspci -nnk | grep -A3 ${GPU_PCI_ID}                    ║"
     echo "║                                                            ║"
-    echo "║  The 'Kernel driver in use' should show 'vfio-pci'         ║"
+    echo "║  'Kernel driver in use' debe mostrar 'vfio-pci'            ║"
     echo "║                                                            ║"
-    echo "║  Then run: ./create-lxc.sh                                 ║"
+    echo "║  Luego ejecuta: sudo bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/dixmer1998-commits/wolf-proxmox-installer/main/install.sh)\"║"
+    echo "║  y selecciona la opcion 2 o 3                              ║"
     echo "║                                                            ║"
     echo "╚══════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
@@ -309,11 +291,11 @@ main() {
     configure_udev_input
     update_system
     verify_iommu
-    
+
     echo ""
-    read -p "Reboot now? (y/n): " do_reboot
-    if [[ "$do_reboot" == "y" || "$do_reboot" == "Y" ]]; then
-        log_info "Rebooting in 5 seconds..."
+    read -p "Reiniciar ahora? (s/n): " do_reboot
+    if [[ "$do_reboot" == "s" || "$do_reboot" == "S" || "$do_reboot" == "y" || "$do_reboot" == "Y" ]]; then
+        log_info "Reiniciando en 5 segundos..."
         sleep 5
         reboot
     else

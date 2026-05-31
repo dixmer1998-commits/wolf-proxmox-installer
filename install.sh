@@ -1,10 +1,12 @@
 #!/bin/bash
-set -euo pipefail
+set -uo pipefail
 
 #=============================================================================
-# Wolf (Games On Whales) - Proxmox Installation Script
-# Complete installation of Wolf gaming streaming on Proxmox with AMD GPU
+# Wolf (Games On Whales) - Instalador para Proxmox
+# Instalacion completa de Wolf gaming streaming en Proxmox con AMD GPU
 #=============================================================================
+
+REPO_URL="https://raw.githubusercontent.com/dixmer1998-commits/wolf-proxmox-installer/main"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -14,15 +16,21 @@ CYAN='\033[0;36m'
 MAGENTA='\033[0;35m'
 NC='\033[0m'
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="${BASH_SOURCE[0]:-}"
+if [[ -n "$SCRIPT_DIR" ]]; then
+    SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_DIR")" && pwd)"
+else
+    SCRIPT_DIR="/tmp/wolf-gow-setup"
+fi
+mkdir -p "$SCRIPT_DIR"
 
 print_banner() {
     echo -e "${MAGENTA}"
     echo "╔══════════════════════════════════════════════════════════════╗"
     echo "║                                                              ║"
-    echo "║       🐺  Wolf (Games On Whales) - Proxmox Installer  🐺    ║"
+    echo "║       🐺  Wolf (Games On Whales) - Instalador Proxmox  🐺   ║"
     echo "║                                                              ║"
-    echo "║        Complete installation for AMD GPU passthrough         ║"
+    echo "║      Instalacion automatica con AMD GPU passthrough          ║"
     echo "║            Wolf + Wolf Den + Gaming Streaming                ║"
     echo "║                                                              ║"
     echo "╚══════════════════════════════════════════════════════════════╝"
@@ -30,149 +38,160 @@ print_banner() {
 }
 
 log_info()    { echo -e "${GREEN}[INFO]${NC} $1"; }
-log_warn()    { echo -e "${YELLOW}[WARN]${NC} $1"; }
+log_warn()    { echo -e "${YELLOW}[AVISO]${NC} $1"; }
 log_error()   { echo -e "${RED}[ERROR]${NC} $1"; }
-log_step()    { echo -e "${BLUE}[STEP]${NC} $1"; }
+log_step()    { echo -e "${BLUE}[PASO]${NC} $1"; }
+
+download_helpers() {
+    log_step "Descargando scripts auxiliares..."
+
+    local scripts=("host-config.sh" "create-lxc.sh" "configure-lxc.sh")
+    local missing=()
+
+    for script in "${scripts[@]}"; do
+        if [[ ! -f "${SCRIPT_DIR}/${script}" ]]; then
+            missing+=("$script")
+        fi
+    done
+
+    if [[ ${#missing[@]} -eq 0 ]]; then
+        log_info "Todos los scripts ya estan descargados"
+        return 0
+    fi
+
+    for script in "${missing[@]}"; do
+        log_info "Descargando ${script}..."
+        if ! curl -fsSL "${REPO_URL}/${script}" -o "${SCRIPT_DIR}/${script}"; then
+            log_error "Error al descargar ${script}"
+            exit 1
+        fi
+        chmod +x "${SCRIPT_DIR}/${script}"
+    done
+
+    log_info "Scripts auxiliares descargados correctamente"
+}
 
 check_root() {
     if [[ $EUID -ne 0 ]]; then
-        log_error "This script must be run as root"
-        echo "Usage: sudo ./install.sh"
+        log_error "Este script debe ejecutarse como root"
+        echo "Uso: sudo ./install.sh"
         exit 1
     fi
 }
 
 check_proxmox() {
     if ! command -v pveversion &>/dev/null; then
-        log_error "This script must be run on a Proxmox VE host"
+        log_error "Este script debe ejecutarse en un host Proxmox VE"
         exit 1
     fi
-    log_info "Proxmox detected: $(pveversion | head -1)"
+    log_info "Proxmox detectado: $(pveversion | head -1)"
 }
 
 print_menu() {
-    echo -e "${CYAN}=== Installation Options ===${NC}"
+    echo -e "${CYAN}=== Opciones de Instalacion ===${NC}"
     echo ""
-    echo "  1) Full installation (all 3 phases)"
-    echo "     - Phase 1: Host configuration (IOMMU, VFIO, drivers)"
-    echo "     - Phase 2: Create LXC container"
-    echo "     - Phase 3: Install Wolf & Wolf Den"
+    echo "  1) Instalacion completa (las 3 fases)"
+    echo "     - Fase 1: Configuracion del host (IOMMU, VFIO, drivers)"
+    echo "     - Fase 2: Crear contenedor LXC"
+    echo "     - Fase 3: Instalar Wolf y Wolf Den"
     echo ""
-    echo "  2) Phase 1 only: Configure host (run first, then reboot)"
+    echo "  2) Solo Fase 1: Configurar host (ejecutar primero, luego reboot)"
     echo ""
-    echo "  3) Phase 2 only: Create LXC container (after reboot)"
+    echo "  3) Solo Fase 2: Crear contenedor LXC (despues del reboot)"
     echo ""
-    echo "  4) Phase 3 only: Configure LXC (after container created)"
+    echo "  4) Solo Fase 3: Configurar LXC (despues de crear el contenedor)"
     echo ""
-    echo "  5) Exit"
+    echo "  5) Salir"
     echo ""
 }
 
 run_phase1() {
-    log_step "Running Phase 1: Host Configuration..."
+    log_step "Ejecutando Fase 1: Configuracion del Host..."
     echo ""
-    
-    if [[ -f "${SCRIPT_DIR}/host-config.sh" ]]; then
-        bash "${SCRIPT_DIR}/host-config.sh"
-    else
-        log_error "host-config.sh not found in ${SCRIPT_DIR}"
-        exit 1
-    fi
+    bash "${SCRIPT_DIR}/host-config.sh"
 }
 
 run_phase2() {
-    log_step "Running Phase 2: LXC Container Creation..."
+    log_step "Ejecutando Fase 2: Creacion del Contenedor LXC..."
     echo ""
-    
-    if [[ -f "${SCRIPT_DIR}/create-lxc.sh" ]]; then
-        bash "${SCRIPT_DIR}/create-lxc.sh"
-    else
-        log_error "create-lxc.sh not found in ${SCRIPT_DIR}"
-        exit 1
-    fi
+    bash "${SCRIPT_DIR}/create-lxc.sh"
 }
 
 run_phase3() {
-    log_step "Running Phase 3: LXC Configuration..."
+    log_step "Ejecutando Fase 3: Configuracion del LXC..."
     echo ""
-    
-    # Get container ID
-    read -p "Enter the LXC container ID to configure: " container_id
-    
+
+    read -p "Ingrese el ID del contenedor LXC a configurar: " container_id
+
     if [[ -z "$container_id" ]]; then
-        log_error "Container ID cannot be empty"
+        log_error "El ID del contenedor no puede estar vacio"
         exit 1
     fi
-    
-    # Check if container exists
+
     if ! pct status "$container_id" &>/dev/null; then
-        log_error "Container ${container_id} not found"
+        log_error "Contenedor ${container_id} no encontrado"
         exit 1
     fi
-    
-    # Check if container is running
+
     local status
     status=$(pct status "$container_id" | awk '{print $2}')
     if [[ "$status" != "running" ]]; then
-        log_warn "Container is not running. Starting..."
+        log_warn "El contenedor no esta corriendo. Iniciando..."
         pct start "$container_id"
         sleep 5
     fi
-    
-    # Copy configure-lxc.sh to the container
-    log_info "Copying configuration script to container..."
+
+    log_info "Copiando script de configuracion al contenedor..."
     pct push "$container_id" "${SCRIPT_DIR}/configure-lxc.sh" /tmp/configure-lxc.sh
-    
-    # Execute the script inside the container
-    log_info "Executing configuration inside container..."
+
+    log_info "Ejecutando configuracion dentro del contenedor..."
     pct exec "$container_id" -- bash /tmp/configure-lxc.sh
-    
-    # Get container IP
+
     local container_ip
-    container_ip=$(pct exec "$container_id" -- hostname -I 2>/dev/null | awk '{print $1}' || echo "unknown")
-    
+    container_ip=$(pct exec "$container_id" -- hostname -I 2>/dev/null | awk '{print $1}' || echo "desconocida")
+
     echo ""
     echo -e "${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}║           Phase 3 Complete!                                 ║${NC}"
+    echo -e "${GREEN}║             Fase 3 Completada!                              ║${NC}"
     echo -e "${GREEN}╠══════════════════════════════════════════════════════════════╣${NC}"
-    echo -e "${GREEN}║  Container ID: ${container_id}                                          ║${NC}"
-    echo -e "${GREEN}║  Container IP: ${container_ip}                                  ║${NC}"
-    echo -e "${GREEN}║  Wolf Den:     http://${container_ip}:8080                  ║${NC}"
+    echo -e "${GREEN}║  ID Contenedor:  ${container_id}                                         ║${NC}"
+    echo -e "${GREEN}║  IP Contenedor:  ${container_ip}                                 ║${NC}"
+    echo -e "${GREEN}║  Wolf Den:       http://${container_ip}:8080                 ║${NC}"
     echo -e "${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}"
 }
 
 run_full_installation() {
-    log_step "Starting full installation..."
+    log_step "Iniciando instalacion completa..."
     echo ""
-    
-    echo -e "${CYAN}This will:${NC}"
-    echo "  1. Configure the host (IOMMU, VFIO, GPU drivers)"
-    echo "  2. Reboot the host"
-    echo "  3. Create a privileged LXC container with GPU passthrough"
-    echo "  4. Install Docker, Wolf, and Wolf Den inside the container"
+
+    echo -e "${CYAN}Esto hara:${NC}"
+    echo "  1. Configurar el host (IOMMU, VFIO, drivers de GPU)"
+    echo "  2. Reiniciar el host"
+    echo "  3. Crear contenedor LXC privilegiado con GPU passthrough"
+    echo "  4. Instalar Docker, Wolf y Wolf Den dentro del contenedor"
     echo ""
-    
-    read -p "Proceed? (y/n): " confirm
-    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+
+    read -p "Proceder? (s/n): " confirm
+    if [[ "$confirm" != "s" && "$confirm" != "S" && "$confirm" != "y" && "$confirm" != "Y" ]]; then
         return
     fi
-    
-    # Phase 1
+
+    # Fase 1
     run_phase1
-    
-    # Ask for reboot
+
+    # Pedir reboot
     echo ""
-    read -p "Phase 1 complete. Reboot now? (y/n): " do_reboot
-    if [[ "$do_reboot" == "y" || "$do_reboot" == "Y" ]]; then
-        log_info "Rebooting in 5 seconds... Run this script again after reboot."
+    read -p "Fase 1 completada. Reiniciar ahora? (s/n): " do_reboot
+    if [[ "$do_reboot" == "s" || "$do_reboot" == "S" || "$do_reboot" == "y" || "$do_reboot" == "Y" ]]; then
+        log_info "Reiniciando en 5 segundos... Ejecuta este script de nuevo despues del reboot."
         sleep 5
         reboot
     else
-        log_warn "Please reboot manually before continuing with Phase 2"
+        log_warn "Reinicia manualmente antes de continuar con la Fase 2"
         echo ""
-        echo -e "${YELLOW}After reboot, run:${NC}"
-        echo "  sudo ${SCRIPT_DIR}/install.sh"
-        echo "  Then select option 2 or 3"
+        echo -e "${YELLOW}Despues del reboot, ejecuta:${NC}"
+        echo "  sudo bash -c \"\$(curl -fsSL ${REPO_URL}/install.sh)\""
+        echo "  Luego selecciona la opcion 2 o 3"
     fi
 }
 
@@ -180,11 +199,12 @@ main() {
     print_banner
     check_root
     check_proxmox
-    
+    download_helpers
+
     while true; do
         print_menu
-        read -p "Select option [1-5]: " choice
-        
+        read -p "Seleccione una opcion [1-5]: " choice
+
         case $choice in
             1)
                 run_full_installation
@@ -203,11 +223,11 @@ main() {
                 break
                 ;;
             5)
-                echo "Exiting..."
+                echo "Saliendo..."
                 exit 0
                 ;;
             *)
-                log_warn "Invalid option. Please select 1-5."
+                log_warn "Opcion invalida. Seleccione 1-5."
                 ;;
         esac
     done
