@@ -43,23 +43,11 @@ log_error()   { echo -e "${RED}[ERROR]${NC} $1"; }
 log_step()    { echo -e "${BLUE}[PASO]${NC} $1"; }
 
 download_helpers() {
-    log_step "Descargando scripts auxiliares..."
+    log_step "Descargando/actualizando scripts auxiliares..."
 
     local scripts=("host-config.sh" "create-lxc.sh" "configure-lxc.sh")
-    local missing=()
 
     for script in "${scripts[@]}"; do
-        if [[ ! -f "${SCRIPT_DIR}/${script}" ]]; then
-            missing+=("$script")
-        fi
-    done
-
-    if [[ ${#missing[@]} -eq 0 ]]; then
-        log_info "Todos los scripts ya estan descargados"
-        return 0
-    fi
-
-    for script in "${missing[@]}"; do
         log_info "Descargando ${script}..."
         if ! curl -fsSL "${REPO_URL}/${script}" -o "${SCRIPT_DIR}/${script}"; then
             log_error "Error al descargar ${script}"

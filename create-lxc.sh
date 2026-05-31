@@ -69,20 +69,28 @@ check_template() {
 
     local template_pattern="ubuntu-24.04"
     local template
-    template=$(pveam list local | grep "$template_pattern" | head -1 | awk '{print $2}')
+    # Buscar template - el output de pveam es: STORAGE:TYPE/FILENAME
+    template=$(pveam list local 2>/dev/null | grep "$template_pattern" | head -1 | awk '{print $1}')
 
     if [[ -z "$template" ]]; then
         log_warn "Template Ubuntu 24.04 no encontrado. Descargando..."
         pveam update
-        template=$(pveam list local | grep "$template_pattern" | head -1 | awk '{print $2}')
+        template=$(pveam list local 2>/dev/null | grep "$template_pattern" | head -1 | awk '{print $1}')
 
         if [[ -z "$template" ]]; then
-            log_error "No se encontro el template Ubuntu 24.04. Descargalo manualmente desde la interfaz de Proxmox."
+            log_error "No se encontro el template Ubuntu 24.04."
+            log_error "Descargalo manualmente desde la interfaz de Proxmox: CT > Templates"
+            log_error "O ejecuta: pveam update && pveam list local | grep ubuntu"
             exit 1
         fi
     fi
 
-    TEMPLATE_FILE="local:vztmpl/${template}"
+    # Si ya empieza con "local:" usarlo directo, sino agregar prefijo
+    if [[ "$template" == local:* ]]; then
+        TEMPLATE_FILE="$template"
+    else
+        TEMPLATE_FILE="local:vztmpl/${template}"
+    fi
     log_info "Usando template: ${TEMPLATE_FILE}"
 }
 
@@ -168,7 +176,7 @@ create_container() {
     log_step "Creando contenedor LXC ${CONTAINER_ID}..."
 
     # Construir parametro de red
-    local net_param="name=eth0,bridge=vmbr0,hwaddr=auto"
+    local net_param="name=eth0,bridge=vmbr0"
     if [[ "$USE_DHCP" == "s" || "$USE_DHCP" == "S" || "$USE_DHCP" == "y" || "$USE_DHCP" == "Y" ]]; then
         net_param="${net_param},ip=dhcp"
     else
