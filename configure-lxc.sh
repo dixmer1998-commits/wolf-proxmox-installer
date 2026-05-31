@@ -67,8 +67,35 @@ check_lxc_environment() {
     fi
 }
 
+configure_dns() {
+    log_step "Configurando DNS..."
+
+    # Verificar si ya hay DNS funcionando
+    if ping -c 1 archive.ubuntu.com &>/dev/null; then
+        log_info "DNS ya funciona correctamente"
+        return 0
+    fi
+
+    # Agregar DNS servers de Google si no existen
+    if ! grep -q "8.8.8.8" /etc/resolv.conf 2>/dev/null; then
+        echo "nameserver 8.8.8.8" >> /etc/resolv.conf
+        echo "nameserver 8.8.4.4" >> /etc/resolv.conf
+        log_info "DNS servers agregados: 8.8.8.8, 8.8.4.4"
+    fi
+
+    # Verificar que funciona
+    if ping -c 1 archive.ubuntu.com &>/dev/null; then
+        log_info "DNS configurado correctamente"
+    else
+        log_warn "DNS puede no funcionar correctamente"
+    fi
+}
+
 install_dependencies() {
     log_step "Instalando dependencias del sistema..."
+
+    # Configurar DNS primero
+    configure_dns
 
     apt-get update -qq
     apt-get install -y \
