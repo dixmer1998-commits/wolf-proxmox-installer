@@ -90,14 +90,21 @@ detect_amd_gpu() {
 }
 
 install_firmware() {
-    log_step "Instalando firmware AMD..."
+    log_step "Verificando firmware AMD..."
 
+    # Verificar si amdgpu ya funciona (Proxmox incluye el driver)
+    if lsmod | grep -q amdgpu; then
+        log_info "Driver amdgpu ya activo (Proxmox incluye firmware AMD)"
+        return 0
+    fi
+
+    # Solo intentar instalar si amdgpu NO funciona
+    log_warn "amdgpu no detectado. Intentando instalar firmware..."
     if dpkg -l | grep -q "firmware-amd-graphics"; then
         log_info "firmware-amd-graphics ya instalado"
     else
         apt-get update -qq
         apt-get install -y firmware-amd-graphics
-        log_info "Firmware AMD instalado"
     fi
 }
 
@@ -156,11 +163,11 @@ verify_host() {
         echo -e "  ${RED}✗${NC} Dispositivos DRI no encontrados"
     fi
 
-    # Verificar firmware
-    if dpkg -l | grep -q "firmware-amd-graphics"; then
-        echo -e "  ${GREEN}✓${NC} Firmware AMD instalado"
+    # Verificar firmware (Proxmox ya lo incluye)
+    if lsmod | grep -q amdgpu; then
+        echo -e "  ${GREEN}✓${NC} Firmware AMD incluido en Proxmox"
     else
-        echo -e "  ${YELLOW}!${NC} Firmware AMD no instalado"
+        echo -e "  ${YELLOW}!${NC} amdgpu no cargado - posible falta de firmware"
     fi
 
     # Verificar udev rules
