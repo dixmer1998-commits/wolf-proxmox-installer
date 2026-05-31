@@ -46,6 +46,26 @@ check_proxmox() {
     log_info "Version de Proxmox: ${pve_version}"
 }
 
+# Detecta si el driver AMD funciona (integrado en kernel de Proxmox)
+check_amd_driver() {
+    if [[ -e /dev/dri/renderD128 ]]; then
+        return 0
+    fi
+    return 1
+}
+
+install_firmware() {
+    log_step "Verificando firmware AMD..."
+
+    if check_amd_driver; then
+        log_info "Driver AMD activo - renderD128 encontrado"
+        return 0
+    fi
+
+    log_warn "renderD128 no encontrado. En Proxmox el driver amdgpu viene integrado en el kernel."
+    log_warn "Si la GPU no aparece en /dev/dri/, verifica en BIOS que la GPU no este deshabilitada."
+}
+
 detect_amd_gpu() {
     log_step "Detectando GPU AMD..."
 
@@ -66,19 +86,6 @@ detect_amd_gpu() {
     echo -e "  ${YELLOW}${gpu_line}${NC}"
     echo ""
 
-    # Verificar que el driver amdgpu este cargado
-    if lsmod | grep -q amdgpu; then
-        log_info "Driver amdgpu esta cargado correctamente"
-    else
-        log_warn "Driver amdgpu no detectado. Intentando cargar..."
-        modprobe amdgpu
-        if lsmod | grep -q amdgpu; then
-            log_info "Driver amdgpu cargado"
-        else
-            log_error "No se pudo cargar amdgpu. Verifica que firmware-amd-graphics este instalado."
-        fi
-    fi
-
     # Verificar dispositivos DRI
     if [[ -d /dev/dri ]]; then
         log_info "Dispositivos DRI disponibles:"
@@ -87,24 +94,12 @@ detect_amd_gpu() {
         log_error "/dev/dri no encontrado. El driver GPU no esta funcionando."
         exit 1
     fi
-}
 
-install_firmware() {
-    log_step "Verificando firmware AMD..."
-
-    # Verificar si amdgpu ya funciona (Proxmox incluye el driver)
-    if lsmod | grep -q amdgpu; then
-        log_info "Driver amdgpu ya activo (Proxmox incluye firmware AMD)"
-        return 0
-    fi
-
-    # Solo intentar instalar si amdgpu NO funciona
-    log_warn "amdgpu no detectado. Intentando instalar firmware..."
-    if dpkg -l | grep -q "firmware-amd-graphics"; then
-        log_info "firmware-amd-graphics ya instalado"
+    # Verificar render node especificamente
+    if [[ -e /dev/dri/renderD128 ]]; then
+        log_info "renderD128 encontrado - listo para Wolf"
     else
-        apt-get update -qq
-        apt-get install -y firmware-amd-graphics
+        log_warn "renderD128 no encontrado. Wolf puede no funcionar correctamente."
     fi
 }
 
@@ -148,13 +143,6 @@ verify_host() {
     echo ""
     echo -e "${CYAN}=== Resumen de Verificacion ===${NC}"
 
-    # Verificar driver amdgpu
-    if lsmod | grep -q amdgpu; then
-        echo -e "  ${GREEN}✓${NC} Driver amdgpu cargado"
-    else
-        echo -e "  ${RED}✗${NC} Driver amdgpu NO cargado"
-    fi
-
     # Verificar dispositivos DRI
     if [[ -d /dev/dri ]]; then
         echo -e "  ${GREEN}✓${NC} Dispositivos DRI disponibles"
@@ -163,11 +151,11 @@ verify_host() {
         echo -e "  ${RED}✗${NC} Dispositivos DRI no encontrados"
     fi
 
-    # Verificar firmware (Proxmox ya lo incluye)
-    if lsmod | grep -q amdgpu; then
-        echo -e "  ${GREEN}✓${NC} Firmware AMD incluido en Proxmox"
+    # Verificar render node
+    if [[ -e /dev/dri/renderD128 ]]; then
+        echo -e "  ${GREEN}✓${NC} renderD128 encontrado"
     else
-        echo -e "  ${YELLOW}!${NC} amdgpu no cargado - posible falta de firmware"
+        echo -e "  ${YELLOW}!${NC} renderD128 no encontrado"
     fi
 
     # Verificar udev rules
@@ -198,8 +186,6 @@ print_next_steps() {
     echo "║                                                            ║"
     echo "║  Siguiente paso: Ejecutar install.sh y seleccionar         ║"
     echo "║  Fase 2 (crear contenedor LXC)                             ║"
-    echo "║                                                            ║"
-    echo "║  sudo bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/dixmer1998-commits/wolf-proxmox-installer/main/install.sh)\"║"
     echo "║                                                            ║"
     echo "╚══════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
