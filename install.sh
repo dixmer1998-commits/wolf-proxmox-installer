@@ -46,10 +46,12 @@ download_helpers() {
     log_step "Descargando/actualizando scripts auxiliares..."
 
     local scripts=("host-config.sh" "create-lxc.sh" "configure-lxc.sh")
+    local cache_bust
+    cache_bust=$(date +%s)
 
     for script in "${scripts[@]}"; do
         log_info "Descargando ${script}..."
-        if ! curl -fsSL "${REPO_URL}/${script}" -o "${SCRIPT_DIR}/${script}"; then
+        if ! curl -fsSL "${REPO_URL}/${script}?v=${cache_bust}" -o "${SCRIPT_DIR}/${script}"; then
             log_error "Error al descargar ${script}"
             exit 1
         fi
