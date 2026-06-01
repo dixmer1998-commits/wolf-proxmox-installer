@@ -190,7 +190,6 @@ create_docker_compose() {
     fi
 
     cat > "$compose_file" << 'COMPOSE_EOF'
-version: "3"
 services:
   wolf:
     image: ghcr.io/games-on-whales/wolf:stable

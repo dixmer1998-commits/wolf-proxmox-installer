@@ -603,9 +603,14 @@ install_wolf_in_lxc() {
 
     # Push del script
     log start "Copiando script al contenedor..."
-    cat "$0" > /tmp/install-in-lxc.sh
-    pct push "$CONTAINER_ID" /tmp/install-in-lxc.sh /tmp/install-in-lxc.sh
-    log done "Script copiado"
+    local script_path
+    script_path=$(readlink -f "$0")
+    if [[ ! -f "$script_path" ]]; then
+        log error "No se encontro el script en $script_path"
+        exit 1
+    fi
+    pct push "$CONTAINER_ID" "$script_path" /tmp/install-in-lxc.sh
+    log done "Script copiado a /tmp/install-in-lxc.sh"
 
     log start "Ejecutando instalacion dentro del LXC (puede tomar 5-10 min)..."
 
@@ -621,6 +626,9 @@ install_wolf_in_lxc() {
 # ============== IN-LXC INSTALLER ==============
 in_lxc_main() {
     set -uo pipefail
+    # En el LXC activamos errexit para fallar rapido si algo sale mal
+    # (whiptail no se usa aqui, asi que es seguro)
+    set -e
 
     # Verificar root
     if [[ $EUID -ne 0 ]]; then
@@ -692,11 +700,10 @@ server {
     }
 }
 PROXY_EOF
-    log "Proxy reverso nginx configurado en /etc/wolf/wolf-proxy.conf (puerto 8081)"
+    log done "Proxy reverso nginx configurado en /etc/wolf/wolf-proxy.conf (puerto 8081)"
 
     # docker-compose
     cat > /etc/wolf/docker-compose.yml <<EOF
-version: "3"
 services:
   wolf:
     image: ghcr.io/games-on-whales/wolf:stable
@@ -764,6 +771,16 @@ services:
       wolf-proxy:
         condition: service_started
 EOF
+    log done "docker-compose.yml generado"
+
+    # Validar que docker-compose es correcto ANTES de levantar servicios
+    log start "Validando docker-compose.yml..."
+    if ! docker compose -f /etc/wolf/docker-compose.yml config --quiet 2>/tmp/compose-err.log; then
+        log error "docker-compose.yml invalido:"
+        cat /tmp/compose-err.log
+        exit 1
+    fi
+    log done "docker-compose.yml valido"
 
     # Helpers
     cat > /usr/local/bin/wolf-pair <<'EOF'
@@ -791,36 +808,75 @@ echo "Socket: $(ls -la /var/run/wolf/wolf.sock 2>/dev/null || echo 'NO ENCONTRAD
 echo "Proxy:  $(curl -sf -o /dev/null -w '%{http_code}' http://localhost:8081/api/v1/apps 2>/dev/null || echo 'DOWN')"
 EOF
     chmod +x /usr/local/bin/wolf-status
+    log done "Helpers instalados: wolf-pair, wolf-status"
 
-    # Iniciar Wolf (genera config.toml con apps default)
+    # Levantar Wolf (genera config.toml con apps default)
+    log start "Iniciando Wolf..."
     cd /etc/wolf
-    [[ -f cfg/config.toml ]] && rm -f cfg/config.toml cfg/key.pem cfg/cert.pem
-    docker compose up -d wolf
-    sleep 8
-
-    # Verificar que Wolf tiene apps
-    if [[ -f cfg/config.toml ]] && (grep -q "\[\[apps\]\]" cfg/config.toml 2>/dev/null || grep -q "moonlight-profile-id" cfg/config.toml 2>/dev/null); then
-        echo "Wolf config OK con apps"
-    else
-        sleep 10
+    rm -f cfg/config.toml cfg/key.pem cfg/cert.pem 2>/dev/null || true
+    if ! docker compose up -d wolf 2>/tmp/wolf-up.log; then
+        log error "Fallo al iniciar Wolf:"
+        cat /tmp/wolf-up.log
+        exit 1
     fi
 
-    # Iniciar proxy reverso (expone Unix socket de Wolf como HTTP en :8081)
-    docker compose up -d wolf-proxy
-    sleep 2
-
-    # Verificar que el proxy responde
-    if curl -sf http://localhost:8081/api/v1/apps -o /dev/null 2>&1; then
-        echo "Wolf proxy HTTP OK en :8081"
-    else
-        echo "Aviso: proxy no responde aun, Wolf Den reintentara (no es fatal)"
+    # Esperar a que Wolf genere el config.toml
+    log start "Esperando que Wolf genere configuracion..."
+    local waited=0
+    while [[ $waited -lt 30 ]]; do
+        if [[ -f cfg/config.toml ]]; then
+            if grep -q "\[\[apps\]\]" cfg/config.toml 2>/dev/null || \
+               grep -q "moonlight-profile-id" cfg/config.toml 2>/dev/null; then
+                log done "Wolf config OK con apps default"
+                break
+            fi
+        fi
+        sleep 2
+        waited=$((waited + 2))
+    done
+    if [[ $waited -ge 30 ]]; then
+        log warn "Wolf tardo en generar config (puede ser normal en hardware lento)"
     fi
 
-    # Iniciar Wolf Den (SSE usara el proxy en :8081)
-    docker compose up -d wolf-den
-    sleep 3
+    # Levantar proxy reverso
+    log start "Iniciando proxy reverso nginx..."
+    if ! docker compose up -d wolf-proxy 2>/tmp/proxy-up.log; then
+        log error "Fallo al iniciar proxy:"
+        cat /tmp/proxy-up.log
+        exit 1
+    fi
 
+    # Esperar a que el proxy responda
+    log start "Verificando proxy HTTP..."
+    local proxy_ok=0
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+        if curl -sf http://localhost:8081/api/v1/apps -o /dev/null 2>&1; then
+            proxy_ok=1
+            break
+        fi
+        sleep 2
+    done
+    if [[ $proxy_ok -eq 1 ]]; then
+        log done "Proxy HTTP OK en :8081"
+    else
+        log warn "Proxy aun no responde, pero continuamos (Wolf Den reintentara)"
+    fi
+
+    # Levantar Wolf Den
+    log start "Iniciando Wolf Den..."
+    if ! docker compose up -d wolf-den 2>/tmp/den-up.log; then
+        log error "Fallo al iniciar Wolf Den:"
+        cat /tmp/den-up.log
+        exit 1
+    fi
+
+    # Verificacion final
+    log start "Verificando estado final..."
+    sleep 5
+    docker compose ps
+    echo ""
     echo "INSTALACION EN LXC COMPLETADA"
+    log done "Todos los servicios iniciados"
 }
 
 # ============== FINAL SUMMARY ==============
