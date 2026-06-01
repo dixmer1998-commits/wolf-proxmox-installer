@@ -266,14 +266,11 @@ lxc.cap.drop:
 lxc.apparmor.profile: unconfined
 lxc.cgroup2.devices.allow: c 10:200 rwm
 
-# Mount entries para GPU y acceso a dispositivos
+    # Mount entries para GPU y acceso a dispositivos
 lxc.mount.entry: /dev/dri dev/dri none bind,optional,create=dir
 lxc.mount.entry: /run/udev mnt/udev none bind,optional,create=dir
 lxc.mount.entry: /dev mnt/dev none bind,optional,create=dir
 EOF
-
-    # Configurar DNS dentro del contenedor antes de iniciarlo
-    pct exec "$CONTAINER_ID" -- bash -c "if [ -L /etc/resolv.conf ] || [ ! -f /etc/resolv.conf ]; then rm -f /etc/resolv.conf 2>/dev/null || true; printf 'nameserver 8.8.8.8\nnameserver 8.8.4.4\n' > /etc/resolv.conf; chmod 644 /etc/resolv.conf; fi" 2>/dev/null || true
 
     log_info "Configuracion de GPU passthrough agregada a ${config_file}"
 
@@ -315,6 +312,10 @@ start_container() {
             log_info "IP obtenida via DHCP: ${container_ip}"
             CONTAINER_IP="${container_ip}"
             USE_DHCP="s"
+
+            # Configurar DNS rompiendo symlink de systemd-resolved
+            pct exec "$CONTAINER_ID" -- bash -c "if [ -L /etc/resolv.conf ] || [ ! -f /etc/resolv.conf ]; then rm -f /etc/resolv.conf 2>/dev/null || true; printf 'nameserver 8.8.8.8\nnameserver 8.8.4.4\n' > /etc/resolv.conf; chmod 644 /etc/resolv.conf; fi" 2>/dev/null || true
+
             return 0
         fi
         sleep 2

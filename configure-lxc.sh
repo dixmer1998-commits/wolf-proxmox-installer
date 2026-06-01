@@ -175,37 +175,6 @@ create_directories() {
     log_info "Directorios creados en /etc/wolf/"
 }
 
-create_wolf_config() {
-    log_step "Creando configuracion de Wolf..."
-
-    local config_file="/etc/wolf/cfg/config.toml"
-
-    if [[ -f "$config_file" ]]; then
-        log_info "La config de Wolf ya existe"
-        read -p "Sobrescribir? (s/n): " overwrite
-        if [[ "$overwrite" != "s" && "$overwrite" != "S" && "$overwrite" != "y" && "$overwrite" != "Y" ]]; then
-            return
-        fi
-    fi
-
-    local uuid
-    uuid=$(cat /proc/sys/kernel/random/uuid)
-
-    cat > "$config_file" << EOF
-hostname = "wolf"
-support_hevc = true
-config_version = 2
-uuid = "${uuid}"
-
-paired_clients = []
-profiles = []
-
-gstreamer = {}
-EOF
-
-    log_info "Config de Wolf creada en ${config_file}"
-}
-
 create_docker_compose() {
     log_step "Creando docker-compose.yml..."
 
@@ -230,6 +199,7 @@ services:
       - WOLF_STOP_CONTAINER_ON_EXIT=TRUE
       - WOLF_RENDER_NODE=__WOLF_RENDER_NODE__
       - WOLF_SOCKET_PATH=/var/run/wolf/wolf.sock
+      - WOLF_LOG_LEVEL=debug
     volumes:
       - /etc/wolf/:/etc/wolf:rw
       - /var/run/docker.sock:/var/run/docker.sock:rw
@@ -372,17 +342,48 @@ STATUS_EOF
 }
 
 start_wolf() {
-    log_step "Iniciando Wolf y Wolf Den..."
+    log_step "Iniciando Wolf..."
 
     cd /etc/wolf
 
-    docker compose pull
-    docker compose up -d
+    # Eliminar config previa para que Wolf genere defaults
+    if [[ -f cfg/config.toml ]]; then
+        log_info "Eliminando config previa para que Wolf genere defaults..."
+        rm -f cfg/config.toml cfg/key.pem cfg/cert.pem 2>/dev/null || true
+    fi
 
-    log_info "Servicios Wolf iniciados"
+    # Iniciar solo Wolf primero
+    docker compose up -d wolf
+    log_info "Esperando que Wolf genere configuracion..."
 
     sleep 5
 
+    # Verificar que Wolf genero config.toml con apps
+    if [[ -f cfg/config.toml ]]; then
+        if grep -q "\[\[apps\]\]" cfg/config.toml 2>/dev/null || grep -q "moonlight-profile-id" cfg/config.toml 2>/dev/null; then
+            log_info "Wolf genero config con apps correctamente"
+        else
+            log_warn "Wolf genero config pero sin apps. Esperando 10s mas..."
+            sleep 10
+        fi
+    else
+        log_warn "Wolf aun no genero config.toml. Esperando 10s mas..."
+        sleep 10
+    fi
+
+    # Verificar config final
+    if [[ -f cfg/config.toml ]]; then
+        log_info "Config de Wolf:"
+        head -30 cfg/config.toml
+    fi
+
+    # Iniciar Wolf Den
+    log_step "Iniciando Wolf Den..."
+    docker compose up -d wolf-den
+
+    log_info "Servicios Wolf iniciados"
+
+    sleep 3
     docker compose ps
 }
 
@@ -424,7 +425,6 @@ main() {
     install_docker
     detect_render_node
     create_directories
-    create_wolf_config
     create_docker_compose
     create_pairing_helper
     create_status_helper
