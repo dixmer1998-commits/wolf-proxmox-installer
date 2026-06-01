@@ -170,7 +170,10 @@ run_full_installation() {
 
     # Fase 2
     echo ""
-    run_phase2
+    run_phase2 || {
+        log_error "Fase 2 fallo. No se puede continuar con Fase 3."
+        return
+    }
 
     # Fase 3
     echo ""

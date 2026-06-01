@@ -153,13 +153,20 @@ get_configuration() {
     USE_DHCP="${input_dhcp:-y}"
 
     if [[ "$USE_DHCP" != "s" && "$USE_DHCP" != "S" && "$USE_DHCP" != "y" && "$USE_DHCP" != "Y" ]]; then
-        read -p "Direccion IP (CIDR, ej: 192.168.1.100/24): " CONTAINER_IP
-        read -p "Gateway: " CONTAINER_GATEWAY
+        # Auto-detectar red del host para sugerir defaults
+        local host_ip
+        host_ip=$(ip -4 addr show vmbr0 2>/dev/null | grep inet | awk '{print $2}' | head -1)
+        local host_net
+        host_net=$(echo "$host_ip" | cut -d. -f1-3)
+        local host_gw
+        host_gw=$(ip route 2>/dev/null | grep default | awk '{print $3}')
+        host_gw="${host_gw:-${host_net}.1}"
+        local suggested_ip="${host_net}.100/24"
 
-        if [[ -z "$CONTAINER_IP" || -z "$CONTAINER_GATEWAY" ]]; then
-            log_error "IP y gateway son requeridos para configuracion estatica"
-            exit 1
-        fi
+        read -p "Direccion IP (CIDR) [${suggested_ip}]: " input_ip
+        CONTAINER_IP="${input_ip:-$suggested_ip}"
+        read -p "Gateway [${host_gw}]: " input_gateway
+        CONTAINER_GATEWAY="${input_gateway:-$host_gw}"
     fi
 
     # Resumen
