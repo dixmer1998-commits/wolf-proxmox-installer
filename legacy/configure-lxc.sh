@@ -215,7 +215,7 @@ services:
     network_mode: host
     restart: unless-stopped
     healthcheck:
-      test: ["-S", "/var/run/wolf/wolf.sock"]
+      test: ["CMD-SHELL", "test -S /var/run/wolf/wolf.sock || exit 1"]
       interval: 5s
       timeout: 3s
       retries: 10
