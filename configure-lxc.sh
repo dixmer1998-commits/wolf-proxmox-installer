@@ -70,24 +70,19 @@ check_lxc_environment() {
 configure_dns() {
     log_step "Configurando DNS..."
 
-    # Verificar si ya hay DNS funcionando
-    if ping -c 1 archive.ubuntu.com &>/dev/null; then
-        log_info "DNS ya funciona correctamente"
-        return 0
+    # systemd-resolved crea symlink a /run/systemd/resolve/stub-resolv.conf
+    # dentro del LXC eso no funciona, reemplazar por archivo estatico
+    if [[ -L /etc/resolv.conf ]] || [[ ! -f /etc/resolv.conf ]] || ! grep -q "8.8.8.8" /etc/resolv.conf 2>/dev/null; then
+        rm -f /etc/resolv.conf 2>/dev/null || true
+        printf "nameserver 8.8.8.8\nnameserver 8.8.4.4\n" > /etc/resolv.conf
+        chmod 644 /etc/resolv.conf
+        log_info "DNS configurado: 8.8.8.8, 8.8.4.4"
     fi
 
-    # Agregar DNS servers de Google si no existen
-    if ! grep -q "8.8.8.8" /etc/resolv.conf 2>/dev/null; then
-        echo "nameserver 8.8.8.8" >> /etc/resolv.conf
-        echo "nameserver 8.8.4.4" >> /etc/resolv.conf
-        log_info "DNS servers agregados: 8.8.8.8, 8.8.4.4"
-    fi
-
-    # Verificar que funciona
     if ping -c 1 archive.ubuntu.com &>/dev/null; then
-        log_info "DNS configurado correctamente"
+        log_info "DNS funciona correctamente"
     else
-        log_warn "DNS puede no funcionar correctamente"
+        log_warn "DNS no funciona. Verifica la red del contenedor."
     fi
 }
 

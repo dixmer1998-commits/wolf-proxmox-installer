@@ -255,11 +255,18 @@ dev1: /dev/uhid
 lxc.cgroup2.devices.allow: a
 lxc.cap.drop:
 
+# Nesting para systemd 255+ y Docker
+lxc.apparmor.profile: unconfined
+lxc.cgroup2.devices.allow: c 10:200 rwm
+
 # Mount entries para GPU y acceso a dispositivos
 lxc.mount.entry: /dev/dri dev/dri none bind,optional,create=dir
 lxc.mount.entry: /run/udev mnt/udev none bind,optional,create=dir
 lxc.mount.entry: /dev mnt/dev none bind,optional,create=dir
 EOF
+
+    # Configurar DNS dentro del contenedor antes de iniciarlo
+    pct exec "$CONTAINER_ID" -- bash -c "if [ -L /etc/resolv.conf ] || [ ! -f /etc/resolv.conf ]; then rm -f /etc/resolv.conf 2>/dev/null || true; printf 'nameserver 8.8.8.8\nnameserver 8.8.4.4\n' > /etc/resolv.conf; chmod 644 /etc/resolv.conf; fi" 2>/dev/null || true
 
     log_info "Configuracion de GPU passthrough agregada a ${config_file}"
 
@@ -276,25 +283,68 @@ start_container() {
 
     log_info "Esperando que el contenedor se inicialice..."
     local retries=30
+    local started=0
     while [[ $retries -gt 0 ]]; do
         if pct exec "$CONTAINER_ID" -- echo "ready" &>/dev/null; then
             log_info "Contenedor listo"
-            return 0
+            started=1
+            break
         fi
         sleep 2
         retries=$((retries - 1))
     done
 
-    log_warn "El contenedor puede estar iniciando. Verifica con: pct status ${CONTAINER_ID}"
+    if [[ $started -eq 0 ]]; then
+        log_warn "El contenedor puede estar iniciando. Verifica con: pct status ${CONTAINER_ID}"
+        return 1
+    fi
+
+    # Esperar IP del contenedor
+    log_info "Obteniendo direccion IP..."
+    local container_ip=""
+    for i in $(seq 1 15); do
+        container_ip=$(pct exec "$CONTAINER_ID" -- hostname -I 2>/dev/null | awk '{print $1}')
+        if [[ -n "$container_ip" ]]; then
+            log_info "IP obtenida via DHCP: ${container_ip}"
+            CONTAINER_IP="${container_ip}"
+            USE_DHCP="s"
+            return 0
+        fi
+        sleep 2
+    done
+
+    # DHCP fallo, configurar IP estatica automaticamente
+    log_warn "DHCP no asigno IP al contenedor. Configurando IP estatica..."
+
+    local host_net
+    host_net=$(ip -4 addr show vmbr0 2>/dev/null | grep inet | awk '{print $2}' | cut -d/ -f1 | cut -d. -f1-3)
+    local host_gw
+    host_gw=$(ip route 2>/dev/null | grep default | awk '{print $3}')
+
+    if [[ -z "$host_net" ]]; then
+        log_error "No se pudo detectar la red del host"
+        return 1
+    fi
+
+    local suggested_ip="${host_net}.100"
+    local suggested_gw="${host_gw:-${host_net}.1}"
+
+    pct exec "$CONTAINER_ID" -- ip addr add "${suggested_ip}/24" dev eth0 2>/dev/null
+    pct exec "$CONTAINER_ID" -- ip link set eth0 up 2>/dev/null
+    pct exec "$CONTAINER_ID" -- ip route add default via "$suggested_gw" 2>/dev/null
+
+    # Re-configurar DNS
+    pct exec "$CONTAINER_ID" -- bash -c "rm -f /etc/resolv.conf 2>/dev/null; printf 'nameserver 8.8.8.8\nnameserver 8.8.4.4\n' > /etc/resolv.conf; chmod 644 /etc/resolv.conf" 2>/dev/null || true
+
+    USE_DHCP="n"
+    CONTAINER_IP="${suggested_ip}/24"
+    CONTAINER_GATEWAY="$suggested_gw"
+    log_info "IP estatica configurada: ${CONTAINER_IP}"
 }
 
 print_next_steps() {
     local container_ip
-    if [[ "$USE_DHCP" == "s" || "$USE_DHCP" == "S" || "$USE_DHCP" == "y" || "$USE_DHCP" == "Y" ]]; then
-        container_ip=$(pct exec "$CONTAINER_ID" -- hostname -I 2>/dev/null | awk '{print $1}' || echo "<IP>")
-    else
-        container_ip=$(echo "$CONTAINER_IP" | cut -d'/' -f1)
-    fi
+    container_ip=$(echo "$CONTAINER_IP" | cut -d'/' -f1)
 
     echo -e "${CYAN}"
     echo "╔══════════════════════════════════════════════════════════════╗"
