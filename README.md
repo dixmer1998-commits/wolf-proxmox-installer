@@ -53,12 +53,42 @@ bash /tmp/wolf-gow-setup/install.sh
    - Creación de directorios Wolf
    - Generación de docker-compose.yml
    - Inicio de Wolf (genera apps default)
-   - Inicio de Wolf Den
+   - Inicio de proxy reverso nginx (expone el Unix socket de Wolf como HTTP en :8081)
+   - Inicio de Wolf Den (apunta al proxy para SSE)
 
 4. **Resumen final**
    - IPs y URLs
    - Comandos útiles (wolf-pair, wolf-status)
    - Próximos pasos
+
+## Arquitectura interna
+
+Tres servicios Docker corriendo en modo `host`:
+
+```
+┌─────────────┐     Unix socket      ┌──────────┐
+│  Wolf Den   │ ────────────────────▶│   Wolf   │
+│  (Blazor)   │   /var/run/wolf/     │  (core)  │
+│   :8080     │      wolf.sock       │  :47984  │
+└──────┬──────┘                       │  :47989  │
+       │                              └────┬─────┘
+       │ HTTP (SSE)                        │
+       │                                   │
+       ▼                                   │
+┌─────────────┐    HTTP    ┌──────────┐    │
+│ Wolf Den    │ ◀──────────│ nginx    │◀───┘
+│ cliente     │            │ proxy    │  (proxy_pass
+│ HTTP        │   :8081    │ :8081    │   unix:/var/run/
+└─────────────┘            └──────────┘   wolf/wolf.sock)
+```
+
+**Por qué el proxy reverso es necesario:** Wolf expone su API REST **solo** vía Unix socket. Wolf Den usa el socket para llamadas síncronas (vía `socat` interno), pero el canal **SSE** (Server-Sent Events) que mantiene la UI actualizada en tiempo real habla HTTP. Sin el proxy, Wolf Den falla con `Connection refused (localhost:80)` al intentar conectar SSE.
+
+**Orden de arranque** (configurado con `healthcheck` + `depends_on`):
+1. `wolf` arranca primero
+2. Wolf expone el Unix socket → healthcheck pasa
+3. `wolf-proxy` (nginx) arranca cuando Wolf está healthy
+4. `wolf-den` arranca cuando el proxy está listo
 
 ## Configuración post-instalación
 
@@ -90,6 +120,61 @@ Por defecto se muestra solo lo esencial. Para depuración:
 
 ```bash
 LOG_LEVEL=debug bash /tmp/wolf-gow-setup/install.sh
+```
+
+## Troubleshooting
+
+### Wolf Den no conecta con Wolf después de reinicios
+
+**Síntoma:** Wolf Den se queda cargando, no muestra apps, no deja editarlas. En logs:
+```
+fail: GamesOnWhales.WolfApi[0]
+The Wolf API SSE encountered an HttpRequestException exception: 
+Statuscode: - Connection refused (localhost:80)
+```
+
+**Causa:** Wolf expone la API REST solo vía Unix socket. Wolf Den usa el socket para llamadas síncronas, pero el canal **SSE** (updates en tiempo real) necesita HTTP. El instalador incluye un **proxy reverso nginx** (`wolf-proxy`) que expone el socket como HTTP en `:8081`. Wolf Den se conecta ahí vía la variable `WOLF_WOLFAPI__BASEURL`.
+
+**Verificar que el proxy funciona:**
+
+```bash
+pct enter 100
+docker ps -a --filter "name=wolf"
+curl -sf http://localhost:8081/api/v1/apps
+```
+
+Si el curl devuelve JSON (no error), el proxy está bien. Si Wolf Den sigue sin funcionar:
+
+```bash
+docker logs --tail 50 wolf-den
+docker restart wolf-den  # A veces basta con reiniciarlo
+```
+
+**Re-aplicar el fix manualmente (si instalaste una versión anterior):**
+
+```bash
+pct enter 100
+cd /etc/wolf
+
+# Crear proxy config
+cat > wolf-proxy.conf <<'EOF'
+server {
+    listen 8081;
+    location / {
+        proxy_pass http://unix:/var/run/wolf/wolf.sock;
+        proxy_http_version 1.0;
+        proxy_set_header Host $host;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 86400;
+    }
+}
+EOF
+
+# Agregar servicio al compose
+# (editar docker-compose.yml y agregar el servicio wolf-proxy de la doc)
+# Luego:
+docker compose up -d
 ```
 
 ## Estructura del proyecto

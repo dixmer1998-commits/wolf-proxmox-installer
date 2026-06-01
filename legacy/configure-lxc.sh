@@ -214,6 +214,27 @@ services:
       - /dev/uhid
     network_mode: host
     restart: unless-stopped
+    healthcheck:
+      test: ["-S", "/var/run/wolf/wolf.sock"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+
+  # Proxy reverso HTTP -> Unix socket (soluciona SSE de Wolf Den)
+  wolf-proxy:
+    image: nginx:alpine
+    container_name: wolf-proxy
+    ports:
+      - 8081:8081
+    volumes:
+      - /var/run/wolf:/var/run/wolf:ro
+      - /etc/wolf/wolf-proxy.conf:/etc/nginx/conf.d/default.conf:ro
+    network_mode: host
+    restart: unless-stopped
+    depends_on:
+      wolf:
+        condition: service_healthy
 
   wolf-den:
     image: ghcr.io/games-on-whales/wolf-den:stable
@@ -222,6 +243,7 @@ services:
       - 8080:8080
     environment:
       - WOLF_SOCKET_PATH=/var/run/wolf/wolf.sock
+      - WOLF_WOLFAPI__BASEURL=http://localhost:8081
     volumes:
       - /etc/wolf/wolf-den:/app/wolf-den/
       - /var/run/wolf:/var/run/wolf
@@ -229,11 +251,36 @@ services:
       - /etc/wolf/compatibilitytools.d:/etc/wolf/compatibilitytools.d
     network_mode: host
     restart: unless-stopped
+    depends_on:
+      wolf-proxy:
+        condition: service_started
 COMPOSE_EOF
 
     sed -i "s|__WOLF_RENDER_NODE__|${WOLF_RENDER_NODE}|g" "$compose_file"
 
+    # Configuracion del proxy reverso
+    cat > /etc/wolf/wolf-proxy.conf <<'PROXY_EOF'
+server {
+    listen 8081;
+
+    location / {
+        proxy_pass http://unix:/var/run/wolf/wolf.sock;
+        proxy_http_version 1.0;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 86400;
+        proxy_send_timeout 86400;
+    }
+}
+PROXY_EOF
+
     log_info "docker-compose.yml creado en ${compose_file}"
+    log_info "Proxy reverso configurado en /etc/wolf/wolf-proxy.conf"
     echo ""
     log_info "Contenido:"
     cat "$compose_file"
@@ -327,6 +374,7 @@ echo "  Audio:   ${SERVER_IP}:48200/udp"
 echo ""
 
 echo -e "${YELLOW}Wolf Den:${NC} http://${SERVER_IP}:8080"
+echo -e "${YELLOW}Wolf API (proxy):${NC} http://${SERVER_IP}:8081"
 echo ""
 
 if [[ -S /var/run/wolf/wolf.sock ]]; then
@@ -375,6 +423,17 @@ start_wolf() {
     if [[ -f cfg/config.toml ]]; then
         log_info "Config de Wolf:"
         head -30 cfg/config.toml
+    fi
+
+    # Iniciar proxy reverso (expone socket Unix como HTTP en :8081)
+    log_step "Iniciando proxy reverso nginx..."
+    docker compose up -d wolf-proxy
+    sleep 2
+
+    if curl -sf http://localhost:8081/api/v1/apps -o /dev/null 2>&1; then
+        log_info "Proxy HTTP en :8081 respondiendo OK"
+    else
+        log_warn "Proxy no responde aun, Wolf Den reintentara"
     fi
 
     # Iniciar Wolf Den

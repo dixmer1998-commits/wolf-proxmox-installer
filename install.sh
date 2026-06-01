@@ -668,6 +668,32 @@ in_lxc_main() {
     # Directorios
     mkdir -p /etc/wolf/cfg /etc/wolf/profile_data /etc/wolf/covers /etc/wolf/compatibilitytools.d /etc/wolf/wolf-den
 
+    # nginx proxy reverso: expone el Unix socket de Wolf como HTTP
+    # Wolf Den necesita HTTP para SSE (Server-Sent Events / updates en tiempo real).
+    # El socket Unix sirve para llamadas sincronas, pero SSE solo habla HTTP.
+    # Ver: https://games-on-whales.github.io/wolf/stable/dev/api.html
+    cat > /etc/wolf/wolf-proxy.conf <<'PROXY_EOF'
+server {
+    listen 8081;
+
+    location / {
+        proxy_pass http://unix:/var/run/wolf/wolf.sock;
+        proxy_http_version 1.0;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Soporte SSE (Server-Sent Events) — critico para updates en vivo
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 86400;
+        proxy_send_timeout 86400;
+    }
+}
+PROXY_EOF
+    log "Proxy reverso nginx configurado en /etc/wolf/wolf-proxy.conf (puerto 8081)"
+
     # docker-compose
     cat > /etc/wolf/docker-compose.yml <<EOF
 version: "3"
@@ -694,6 +720,29 @@ services:
       - /dev/uhid
     network_mode: host
     restart: unless-stopped
+    healthcheck:
+      test: ["-S", "/var/run/wolf/wolf.sock"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+
+  # Proxy reverso HTTP -> Unix socket de Wolf
+  # Soluciona: Wolf Den SSE "Connection refused (localhost:80)"
+  # Wolf expone API solo via Unix socket; Wolf Den (Blazor) necesita HTTP para SSE.
+  wolf-proxy:
+    image: nginx:alpine
+    container_name: wolf-proxy
+    ports:
+      - 8081:8081
+    volumes:
+      - /var/run/wolf:/var/run/wolf:ro
+      - /etc/wolf/wolf-proxy.conf:/etc/nginx/conf.d/default.conf:ro
+    network_mode: host
+    restart: unless-stopped
+    depends_on:
+      wolf:
+        condition: service_healthy
 
   wolf-den:
     image: ghcr.io/games-on-whales/wolf-den:stable
@@ -702,6 +751,8 @@ services:
       - 8080:8080
     environment:
       - WOLF_SOCKET_PATH=/var/run/wolf/wolf.sock
+      # Apunta al proxy reverso para que SSE (HTTP) funcione
+      - WOLF_WOLFAPI__BASEURL=http://localhost:8081
     volumes:
       - /etc/wolf/wolf-den:/app/wolf-den/
       - /var/run/wolf:/var/run/wolf
@@ -709,6 +760,9 @@ services:
       - /etc/wolf/compatibilitytools.d:/etc/wolf/compatibilitytools.d
     network_mode: host
     restart: unless-stopped
+    depends_on:
+      wolf-proxy:
+        condition: service_started
 EOF
 
     # Helpers
@@ -729,8 +783,12 @@ SERVER_IP=$(hostname -I | awk '{print $1}')
 echo "=== Wolf Status ==="
 echo "IP: $SERVER_IP"
 docker ps -a --filter "name=wolf" --format "  {{.Names}}: {{.Status}}"
-echo "Moonlight: https://$SERVER_IP:47984"
-echo "Wolf Den:  http://$SERVER_IP:8080"
+echo "Moonlight:   https://$SERVER_IP:47984"
+echo "Wolf Den:    http://$SERVER_IP:8080"
+echo "Wolf API:    http://$SERVER_IP:8081 (proxy HTTP -> Unix socket)"
+echo ""
+echo "Socket: $(ls -la /var/run/wolf/wolf.sock 2>/dev/null || echo 'NO ENCONTRADO')"
+echo "Proxy:  $(curl -sf -o /dev/null -w '%{http_code}' http://localhost:8081/api/v1/apps 2>/dev/null || echo 'DOWN')"
 EOF
     chmod +x /usr/local/bin/wolf-status
 
@@ -747,7 +805,18 @@ EOF
         sleep 10
     fi
 
-    # Iniciar Wolf Den
+    # Iniciar proxy reverso (expone Unix socket de Wolf como HTTP en :8081)
+    docker compose up -d wolf-proxy
+    sleep 2
+
+    # Verificar que el proxy responde
+    if curl -sf http://localhost:8081/api/v1/apps -o /dev/null 2>&1; then
+        echo "Wolf proxy HTTP OK en :8081"
+    else
+        echo "Aviso: proxy no responde aun, Wolf Den reintentara (no es fatal)"
+    fi
+
+    # Iniciar Wolf Den (SSE usara el proxy en :8081)
     docker compose up -d wolf-den
     sleep 3
 
@@ -774,6 +843,7 @@ print_final_summary() {
     ║                                                              ║
     ║  Moonlight:     Conectar a ${container_ip}
     ║  Wolf Den:      http://${container_ip}:8080
+    ║  Wolf API:      http://${container_ip}:8081 (proxy)
     ║                                                              ║
     ║  Comandos (dentro del LXC):                                  ║
     ║    wolf-pair    Ver URL de pairing                          ║
